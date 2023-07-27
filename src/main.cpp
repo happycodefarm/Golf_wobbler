@@ -4,9 +4,7 @@
 #include <EEPROM.h>
 #include "elapsedMillis/elapsedMillis.h"
 #include <FastLED.h>
-#include "slopes.h"
 #include <Preferences.h>
-
 
 // OTA
 #include "OverTheAir.h"
@@ -16,9 +14,15 @@
 #include <ArduinoOTA.h>
 
 // server
+#include "SPIFFS.h"
+
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include "index.h"
+
+
+#include <AsyncJson.h>
+#include <ArduinoJson.h>
+
 const char* PARAM_INPUT = "value";
 
 AsyncWebServer server(80);
@@ -45,6 +49,11 @@ volatile  bool canSample = true;
 float speedPeak;
 bool debug = false;
 
+#define MAX_LEDS 1000
+int ledCount = 0;
+
+float terrainSlopeAngles[MAX_LEDS] = {};
+float terrainLevels[MAX_LEDS] = {};
 
 #define SAMPLING_TIME 4000000 // 4 seconds
 
@@ -80,7 +89,7 @@ TM1637Display display(CLK, DIO);
 #define BUTTON  0
 #define BRIGHTNESS  255
 #define PIEZO 4
-CRGB leds[NUM_LEDS];
+CRGB leds[MAX_LEDS];
 
 
 // game
@@ -119,19 +128,14 @@ elapsedMillis immobilityTimer;
 int timeInterval = 2; // game timer
 
 // fade all leds to black
-void fadeall() { for(int i = 0; i < NUM_LEDS; i++) { leds[i].nscale8(250); } }
+void fadeall() { for(int i = 0; i < ledCount; i++) { leds[i].nscale8(250); } }
 
 void showWin() {
   Serial.println("win");
   display.setSegments(GOOD);
   for (int x = 0; x < 250; x++) {
-    for(int i = 0; i < NUM_LEDS; i++) {
-        ((i+x)%6>3) ?  leds[NUM_LEDS-i] = CRGB::Yellow : leds[NUM_LEDS-i] = CRGB::Black;
-        //(millis()/20 + i) % 20 < 10 ?  leds[i] = CRGB::Yellow : leds[i] = CRGB::Black;
-        // unsigned char state = (millis()/1000)%3;
-        // if (state==0) display.setSegments(HIT);
-        // else if (state==1) display.showNumberDec(hits,false);
-        // else display.setSegments(GOOD); 
+    for(int i = 0; i < ledCount; i++) {
+        ((i+x)%6>3) ?  leds[ledCount-i] = CRGB::Yellow : leds[ledCount-i] = CRGB::Black;
     }
     //delay(1000);
     unsigned char state = (x/10)%3;
@@ -140,15 +144,6 @@ void showWin() {
     else display.setSegments(GOOD); 
     FastLED.show();
   }
-  // for(int i = 0; i < NUM_LEDS; i++) {
-  //   (millis()/20 + i) % 20 < 10 ?  leds[i] = CRGB::Yellow : leds[i] = CRGB::Black;
-  //   if (i%3==0) FastLED.show();
-  //   unsigned char state = (millis()/1000)%3;
-
-  //   if (state==0) display.setSegments(HIT);
-  //   else if (state==1) display.showNumberDec(hits,false);
-  //   else display.setSegments(GOOD);
-  // }
 }
 
 void showSucess() {
@@ -166,31 +161,21 @@ void showSucess() {
     fadeall();
     FastLED.show(); 
   }
- 
 }
 
 void showLoose() {
   display.setSegments(LOST);
-  // for(int i = 0; i < NUM_LEDS; i++) {
-  //     (millis()/20 + i) % 20 < 10 ?  leds[i] = CRGB::Red : leds[i] = CRGB::Black;
-      
-  //     if (millis()%2000<1000) display.setSegments(NONE);
-  //     else display.showNumberDec(hits,false);
-  // }
-  // FastLED.show();
 
   for (int x = 0; x < 250; x++) {
-    for(int i = 0; i < NUM_LEDS; i++) {
+    for(int i = 0; i < ledCount; i++) {
         ((i+x)%6>3) ?  leds[i] = CRGB::Red : leds[i] = CRGB::Black;
     }
     FastLED.show();
   }
-
 }
 
 void showMissed() {
   display.setSegments(BAD);
-
 
   if (hits >= 7) return;
 
@@ -276,9 +261,10 @@ void nextHole() {
 }
 
 void draw() {
-  for (int led = 0; led < NUM_LEDS; led++) { // green terrain
+  for (int led = 0; led < ledCount; led++) { // green terrain
     if (debug)
-        leds[led] =  led % 10 == 0 ? (led % 100 == 0 ? CRGB(5,0,0) : CRGB(0,0,5)) : CRGB(0,5,0);
+    leds[led] = CHSV(terrainLevels[led]*2.55, 255, 255);
+       // leds[led] =  led % 10 == 0 ? (led % 100 == 0 ? CRGB(5,0,0) : CRGB(0,0,5)) : CRGB(0,5,0);
     else
         leds[led] = CRGB(0,5,0);
     }
@@ -333,13 +319,6 @@ void IRAM_ATTR ISR2() {
   digitalWrite(LED_BUILTIN, LOW);
 }
 
-// void IRAM_ATTR ISR3() {
-//    Serial.println("retry");
-//   retry = true;  
-// }
-
-
-
 void printPrefs() {
   Serial.printf("Setting\n\n----------\n(t)errain scale : %f \n", prefs.getFloat("t_scale"));
   Serial.printf("sensor (s)cale : %f \n", prefs.getFloat("g_scale"));
@@ -376,8 +355,6 @@ void play() {
     }
   }
   
-  //Serial.println(ballVelocity);
-
   // Newton's 2nd law of motion
   float nReaction = (ballMass*worldGravity*sin(terrainSlopeAngles[ballPositionIndex]*PI/180));
   float nFriction = (ballMass*terrainFriction*worldGravity*cos(terrainSlopeAngles[ballPositionIndex]*PI/180));
@@ -404,7 +381,7 @@ void play() {
   ballPosition += ballVelocity; // update ball position
 
   // position to led index with congruance
-  ballPositionIndex = int(floor(ballPosition / terrainScale)) % NUM_LEDS;
+  ballPositionIndex = int(floor(ballPosition / terrainScale)) % ledCount;
 
   // immobility check
   if (lastPositionIndex != ballPositionIndex) immobilityTimer = 0; 
@@ -486,28 +463,9 @@ void checkSerial() {
   }
 }
 
-
-//   //  prefs.putFloat("t_scale", terrainScale);
-//   // prefs.putFloat("g_scale", sensorScale);
-//   // prefs.putFloat("b_mass", ballMass);
-//   // prefs.putFloat("t_friction", terrainFriction);
-//   // prefs.putFloat("w_gravity", worldGravity);
-//   // prefs.putFloat("b_hole", ballInHoleVelocity);
-//   // prefs.putUInt("g_hysterisis", hyterisisLimit);
-
-
 // Replaces placeholder with button section in your web page
 String processor(const String& var){
   
-  //  terrainScale = prefs.getFloat("t_scale", 200.0);
-  // sensorScale = prefs.getFloat("g_scale", 2.0);
-  // ballMass = prefs.getFloat("b_mass", 1.0);
-  // terrainFriction = prefs.getFloat("t_friction", 0.1);
-  // worldGravity = prefs.getFloat("w_gravity", 9.98);
-  // ballInHoleVelocity = prefs.getFloat("b_hole", 25.0);
-  // hyterisisLimit = prefs.getUInt("g_hysterisis", 50);
-
-
   if (var == "T_SCALE"){
     return String(terrainScale);
   } else  if (var == "G_SCALE") {
@@ -527,10 +485,45 @@ String processor(const String& var){
   return String();
 }
 
+void readAnglesData(){
+    File file = SPIFFS.open("/angles.txt");
+    int index = 0;
+
+    while(file.available()){
+      String s = file.readStringUntil(',');
+      terrainSlopeAngles[index] = s.toFloat();
+      index++;
+    }
+    file.close();
+    ledCount = index;
+    Serial.printf("led count : %i\n", ledCount);
+}
+
+void readLevelsData(){
+    File file = SPIFFS.open("/levels.txt");
+    int index = 0;
+
+    while(file.available()){
+      String s = file.readStringUntil(',');
+      terrainLevels[index] = s.toFloat();
+      index++;
+    }
+    file.close();
+    ledCount = index;
+    Serial.printf("led count : %i\n", ledCount);
+}
+
 void setup() {
 
-  initOTA(OTA_SSID, OTA_PASSWORD);
+    // Initialize SPIFFS
+  if(!SPIFFS.begin(true)){
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    // return;
+  }
 
+  readAnglesData();
+
+  initOTA(OTA_SSID, OTA_PASSWORD);
 
   pinMode(hall_A, INPUT);
   pinMode(hall_B, INPUT);
@@ -576,22 +569,68 @@ void setup() {
 
   holeLedIndex = holes[holeCounter];//+ random(-20,20);
 
-  FastLED.addLeds<CHIPSET, LEDSTRIP_DATA, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
+  FastLED.addLeds<CHIPSET, LEDSTRIP_DATA, COLOR_ORDER>(leds, MAX_LEDS).setCorrection( TypicalLEDStrip );
   FastLED.setBrightness( BRIGHTNESS );
 
   display.setSegments(GOLF);
 
 
-    // Route for root / web page
+  // Route for root / web page
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html, processor);
+    request->send(SPIFFS, "/index.html", String(), false, processor);
   });
+
+  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
+     request->send(SPIFFS, "/settings.html", String(), false, processor);
+  });
+
+  server.on("/editor", HTTP_GET, [](AsyncWebServerRequest *request){
+     request->send(SPIFFS, "/editor.html", String(), false);
+  });
+
+  server.on("/upload", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (request->hasParam("angles")) {
+      Serial.println("processing angles");
+      String angles = request->getParam("angles")->value();
+      File file = SPIFFS.open("/angles.txt", FILE_WRITE);
+      file.print(angles);
+      file.close();
+
+      readAnglesData();
+      request->send(200, "text/plain", "OK");
+
+    } else if (request->hasParam("levels")) {
+      Serial.println("processing levels");
+      String angles = request->getParam("levels")->value();
+      File file = SPIFFS.open("/levels.txt", FILE_WRITE);
+      file.print(angles);
+      file.close();
+
+      readLevelsData();
+      request->send(200, "text/plain", "OK");
+
+    } else {
+      request->send(200, "text/plain", "NO DATA");
+    }
+  });
+
+ server.on("/get", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (request->hasParam("levels")) {
+      Serial.print("sending levels...   ");
+      request->send(SPIFFS, "/levels.txt", String(), false );
+      Serial.println("done.");
+    } else if (request->hasParam("angles")) {
+      Serial.print("sending angles...   ");
+      request->send(SPIFFS, "/angles.txt", String(), false );
+      Serial.println("done.");
+    } else {
+      request->send(200, "text/plain", "BAD REQUEST");
+    }
+ });
 
   // Send a GET request to <ESP_IP>/slider?value=<inputMessage>
   server.on("/pref", HTTP_GET, [] (AsyncWebServerRequest *request) {
     String inputMessage;
-    // GET input1 value on <ESP_IP>/slider?value=<inputMessage>
-
     if (request->hasParam("t_scale")) {
       inputMessage = request->getParam("t_scale")->value();
       prefs.putFloat("t_scale", inputMessage.toFloat());

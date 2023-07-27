@@ -1,0 +1,285 @@
+<!DOCTYPE html> 
+<html>
+  <head><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Golf</title>
+    <style>
+      
+      :root { --slider-thumb-color: rgb(0, 38, 253);}
+      * {
+        user-select: none;
+        -moz-user-select: none;
+        -webkit-user-select: none;
+        -ms-user-select: none;
+      }
+      html {font-family: Arial; display: inline-block; text-align: center;background: #051f3f; color: white;}
+      h2 {font-size: 2.3rem;}
+      p {font-size: 1.9rem;}
+      body {margin:0px auto; padding-bottom: 25px;}
+      
+      #title {
+       
+      }
+
+      #container {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-around;
+        width:max-content;
+        height: 500px;
+      }
+
+      .slider_container {
+        display: flex;
+        flex-direction: column;
+        justify-content: start;
+        /* border: 1px black solid; */
+        width: 50px;
+        height: fit-content;
+      }
+
+      .slider { 
+        -webkit-appearance: none; margin: 14px; width: 360px; height: 25px; background: #516276;
+        outline: none; -webkit-transition: .2s; transition: opacity .2s;
+        border-radius: 5px;
+      }
+      .slider::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none; width: 35px; height: 35px; border-radius: 5px; background: var(--slider-thumb-color); cursor: pointer;
+      }
+      .slider::-webkit-slider-thumb:active {
+        /* background: #888641; */
+      }
+      .slider::-moz-range-thumb {
+        width: 35px; height: 35px; border-radius: 5px; background: var(--slider-thumb-color); cursor: pointer;
+      }
+      .v_slider {
+        -webkit-transform: translateY(-180px) rotate(-90deg);
+        align-self: center;
+        margin-top: 360px;
+        /* padding: 0; */
+      }
+
+      .slider_index {
+        color: #516276;
+      }
+
+      .button {
+        margin-top:35px;
+        background-color: #FFD65C;
+        border: none;
+        padding: 15px 32px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        align-self: flex-end;
+      }
+
+      .button:active {
+        margin-top:35px;
+        background-color: #888641;
+        border: none;
+        padding: 15px 32px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id='title'>Golf Wobbler Terrain Editor</h1>
+    <div>
+      <input type="button" id="upload_button" class="button" value="Upload">
+      <input class="button" type="button" id="debug" name="debug" value="debug">
+    </div>
+
+    <div id="container">
+      <!-- <div><input class="button" type="button" id="previous_button" name="previous" value="<-"></div>
+      <div><input class="v_slider slider" type="range" id="hight_slider" name="hight" min="0" max="200" step="1.0" value="%T_SCALE%"><label for="t_scale">Terrain Scale: %T_SCALE%</label></div>
+      <div><input class="button" type="button" id="next_button" name="next" value="->"></div> -->
+    </div>
+    <script>
+
+      let ledCount = 900
+      let ledStep = 10
+
+      let levels = []
+      let levelsString = ""
+      let angles = []
+      let anglesString = ""
+
+      let steps = ledCount / ledStep
+      let horizontalScale = 5.0
+      let container = document.getElementById('container')
+
+      for(let i = 0; i<=steps;  i++) {
+
+        let debug = document.getElementById('debug')
+        debug.onclick = function() {
+          var xhr = new XMLHttpRequest()
+          xhr.open("GET", "/debug", true)
+          xhr.send();
+        }
+
+        let sliderContainer = document.createElement('div')
+        let slider = document.createElement('input')
+        let sliderValue = document.createElement('span')
+        let sliderIndex = document.createElement('span')
+
+        sliderContainer.classList.add('slider_container')
+        slider.type = "range"
+        slider.classList.add('slider', 'v_slider')
+        slider.style.setProperty('--slider-thumb-color', `hsl(${slider.value*3.6}deg 100% 50%`)
+
+        sliderValue.classList.add('slider_value')
+        sliderValue.innerHTML = '0'
+        sliderValue.innerHTML = slider.value
+
+        sliderIndex.classList.add('slider_index')
+        sliderIndex.innerHTML = `${(i*10)+1}`
+
+        sliderContainer.appendChild(sliderIndex)
+        sliderContainer.appendChild(slider)
+        sliderContainer.appendChild(sliderValue)
+        
+        container.appendChild(sliderContainer)
+        
+        slider.oninput = function() {
+          sliderValue.innerHTML = this.value
+          slider.style.setProperty('--slider-thumb-color', `hsl(${this.value*3.6}deg 100% 50%`)
+          console.log(slider.style.getPropertyValue(""))
+        }
+        
+        slider.onchange = function() {
+          computeLevels()
+
+          console.log("uploading levels...")
+         
+          var xhr = new XMLHttpRequest()
+          xhr.open("GET", "/upload?levels="+levelsString, true)
+          xhr.send();
+        }
+
+        let uploadButton = document.getElementById("upload_button")
+        
+        uploadButton.onclick = function() {
+          computeSlopes()
+
+          console.log("uploading angles...")
+          var xhr = new XMLHttpRequest()
+          xhr.open("GET", "/upload?angles="+anglesString, true)
+          xhr.send();
+        }
+
+        function computeSlopes() {
+          console.log("compute levels")
+
+          angles = []
+          anglesString = ""
+          let points = document.querySelectorAll('.slider')
+
+          for (let i = 0; i < steps; i++ ) {
+      
+            let interpolatedPoints = interpolate(i*50.0, 100.0 - points[i].value, (i+1)*50.0, 100.0 - points[i+1].value, ledStep)
+            
+            if (i==steps-1) {
+              console.log("interpolatedPoints")
+              console.log(interpolatedPoints)
+            }
+
+            for (let j = 0; j < interpolatedPoints.length-1; j++ ) {
+              let angle = getAngle(j*5.0, interpolatedPoints[j], (j+1)*horizontalScale, interpolatedPoints[j+1])
+              angles.push(angle)
+              anglesString += `${angle},`
+            }
+          }
+         
+        }
+
+        function computeLevels() {
+          console.log("compute levels")
+          levels = []
+          levelsString =""
+
+          let points = document.querySelectorAll('.slider')
+          
+
+          for (let i = 0; i < steps; i++ ) {
+      
+            let interpolatedPoints = interpolate(i*50.0, 100.0 - points[i].value, (i+1)*50.0, 100.0 - points[i+1].value, ledStep)
+
+            for (let j = 0; j < interpolatedPoints.length-1; j++ ) {
+              levels.push[interpolatedPoints[j]]
+              levelsString += `${interpolatedPoints[j]},`
+            }
+          }
+        }
+
+        function getAngle(x1, y1, x2, y2) {
+          let dx, dy, angle
+          dx = x2 - x1
+          dy = y2 - y1
+          
+          angle = Math.atan2(dx , dy) * 180 / Math.PI
+          angle = (angle+270)%360
+          return angle
+        }
+
+        function interpolate(x1, y1, x2, y2, nPoints) {
+          // get equation y = ax + b
+          let  points=[]
+          let a = (y2 - y1) / (x2 - x1)
+          let b = y2 - a * x2
+          let step = Math.abs(x1 - x2) / nPoints
+          for (let x = Math.min(x1, x2); x < Math.max(x1,x2); x += step) {
+              let y = a*x+b
+              points.push(y)
+          }
+          points.push(y2)
+          return points
+        }
+
+        function init()  {
+          computeSlopes()
+        }
+      }
+
+      function getLevels() {
+        console.log("getting levels")
+
+        var xhr = new XMLHttpRequest()
+        xhr.open("GET", "/get?levels", true)
+        xhr.responseType = "text";
+        
+        xhr.onload = () => {
+          if (xhr.readyState === xhr.DONE) {
+            if (xhr.status === 200) {
+              // console.log(xhr.response)
+             // console.log(xhr.responseText)
+              let array = xhr.responseText.split(',').map(Number);
+              console.log(array)
+
+              let sliders = document.querySelectorAll('.slider')
+              let slidersValue = document.querySelectorAll('.slider_value')
+
+      
+              console.log(sliders)
+              console.log(steps)
+              for (let i = 0; i < sliders.length; i++ ) {
+                sliders[i].value = 100 - array[i*10]
+                sliders[i].style.setProperty('--slider-thumb-color', `hsl(${sliders[i].value*3.6}deg 100% 50%`)
+                slidersValue[i].innerHTML = sliders[i].value
+              }
+            }
+          }
+        }
+        xhr.send(null)
+      }
+    </script>
+    <script>
+      init()
+      getLevels()
+    </script>
+    </body>
+  </body>
+</html>
