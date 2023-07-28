@@ -4,8 +4,6 @@
 #include <EEPROM.h>
 #include "elapsedMillis/elapsedMillis.h"
 #include <FastLED.h>
-#include <Preferences.h>
-
 // OTA
 #include "OverTheAir.h"
 #include <esp_wifi.h>
@@ -15,22 +13,16 @@
 
 // server
 #include "SPIFFS.h"
-
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+AsyncWebServer server(80);
 
 
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
-
-const char* PARAM_INPUT = "value";
-
-AsyncWebServer server(80);
-
+StaticJsonDocument<20000> json;  
 
 //#define SETUP // uncomment to reset setup default
-
-// #define DEBUG
 
 // hall sensors
 #define hall_A 5
@@ -50,13 +42,12 @@ float speedPeak;
 bool debug = false;
 
 #define MAX_LEDS 1000
-int ledCount = 0;
+int pointCount = 10;
 
-float terrainSlopeAngles[MAX_LEDS] = {};
-float terrainLevels[MAX_LEDS] = {};
+float terrainSlopeAngles[MAX_LEDS/10] = {0.0};
+float terrainLevels[MAX_LEDS/10] = {0.0};
 
 #define SAMPLING_TIME 4000000 // 4 seconds
-
 
 // 7 segment display
 #define CLK 26
@@ -93,8 +84,6 @@ CRGB leds[MAX_LEDS];
 
 
 // game
-Preferences prefs;
-
 float terrainScale = 200.0f;
 float sensorScale = 0.6f;
 float ballMass = 1.0f; // Kg // not used
@@ -126,18 +115,62 @@ int hits = 0; // hits counter
 
 elapsedMillis immobilityTimer;
 int timeInterval = 2; // game timer
+volatile bool needReadData = false;
+
+// utils
+//  void interpolateLevels(float x1, float y1, float x2, float y2, int nPoints) {
+//   // get equation y = ax + b
+//   // let  points=[]:
+  
+//   float a = (y2 - y1) / (x2 - x1);
+//   let float = y2 - a * x2;
+//   float step = abs(x1 - x2) / nPoints;
+//   for (int x = min(x1, x2); x < max(x1,x2); x += step) {
+//       float y = a*x+b;
+//       points.push(y)
+//   }
+//   points.push(y2)
+//   return points
+// }
+
+
+float getAngle(float x1, float y1, float x2, float y2) {
+
+  // returns the angle between edge and a vector
+  //        90°   
+  // 135°    |   45°
+  //      \  |  /
+  //       \ | /
+  //        \|/
+  // 180°--x1-y1--0°
+  //        /|\
+  //       / | \
+  //      /  |  \
+  // 225°    |   315°
+  //        270°
+
+  float dx, dy, angle;
+  dx = x2 - x1;
+  dy = y2 - y1;
+  
+  angle = atan2(dy, dx) * 180.0 / PI;
+  // angle = angle.0;//%360;
+  while(angle >= 360.0) angle -= 360.0;
+  while(angle < 0.0) angle += 360.0;
+
+  return angle;
+}
 
 // fade all leds to black
-void fadeall() { for(int i = 0; i < ledCount; i++) { leds[i].nscale8(250); } }
+void fadeall() { for(int i = 0; i < pointCount*10; i++) { leds[i].nscale8(250); } }
 
 void showWin() {
   Serial.println("win");
   display.setSegments(GOOD);
   for (int x = 0; x < 250; x++) {
-    for(int i = 0; i < ledCount; i++) {
-        ((i+x)%6>3) ?  leds[ledCount-i] = CRGB::Yellow : leds[ledCount-i] = CRGB::Black;
+    for(int i = 0; i < pointCount*10; i++) {
+        ((i+x)%6>3) ?  leds[(pointCount*10)-i] = CRGB::Yellow : leds[(pointCount*10)-i] = CRGB::Black;
     }
-    //delay(1000);
     unsigned char state = (x/10)%3;
     if (state==0) display.setSegments(HIT);
     else if (state==1) display.showNumberDec(hits,false);
@@ -167,7 +200,7 @@ void showLoose() {
   display.setSegments(LOST);
 
   for (int x = 0; x < 250; x++) {
-    for(int i = 0; i < ledCount; i++) {
+    for(int i = 0; i < (pointCount*10); i++) {
         ((i+x)%6>3) ?  leds[i] = CRGB::Red : leds[i] = CRGB::Black;
     }
     FastLED.show();
@@ -227,7 +260,6 @@ void replayHole() {
       showLoose();
       resetGame();
   }
-
   sampling = false;
   canSample = true;
 }
@@ -261,12 +293,23 @@ void nextHole() {
 }
 
 void draw() {
-  for (int led = 0; led < ledCount; led++) { // green terrain
-    if (debug)
-    leds[led] = CHSV(terrainLevels[led]*2.55, 255, 255);
-       // leds[led] =  led % 10 == 0 ? (led % 100 == 0 ? CRGB(5,0,0) : CRGB(0,0,5)) : CRGB(0,5,0);
-    else
-        leds[led] = CRGB(0,5,0);
+  
+    if (debug) {
+      int led = 0;
+      for (int point = 0; point < pointCount; point++) {
+        leds[point*10] = CHSV(terrainLevels[point]*2.55, 255, 255); // editor terrain
+
+        for (int i = 0; i< 10; i++) {
+          float steps = (terrainLevels[point+1] - terrainLevels[point]) / 10.0;
+          float interpolated = terrainLevels[point] + (steps*i);
+          leds[(point*10)+i] = CHSV(interpolated*2.55, 255, 255); // editor terrain
+        }
+      }
+      //leds[led] = CHSV((100.0 - terrainLevels[led])*2.55, 255, 255); // editor terrain
+    } else {
+       for (int led = 0; led < pointCount * 10; led++) {
+          leds[led] = CRGB(0,5,0); // green terrain
+       }
     }
 
   // hole
@@ -319,15 +362,7 @@ void IRAM_ATTR ISR2() {
   digitalWrite(LED_BUILTIN, LOW);
 }
 
-void printPrefs() {
-  Serial.printf("Setting\n\n----------\n(t)errain scale : %f \n", prefs.getFloat("t_scale"));
-  Serial.printf("sensor (s)cale : %f \n", prefs.getFloat("g_scale"));
-  Serial.printf("ball (m)ass : %f \n", prefs.getFloat("b_mass"));
-  Serial.printf("ball in hole (v)elocity : %f \n", prefs.getFloat("b_hole"));
-  Serial.printf("terrain (f)riction : %f \n", prefs.getFloat("t_friction"));
-  Serial.printf("world (g)ravity : %f \n", prefs.getFloat("w_gravity"));
-  Serial.printf("(h)Hysterisis limit : %i \n----------\n", prefs.getUInt("g_hysterisis"));
-}
+
 
 void play() {
 
@@ -337,7 +372,6 @@ void play() {
     immobilityTimer = 0;
 
     if  (speed < speedPeak || micros() - ts_B >  SAMPLING_TIME) { // slowing down or timeout : stop sampling
-     
       ballVelocity = speedPeak * sensorScale;
       Serial.printf("Sampling Done\nvelocity = %f, speed = %f, peak = %f\n",ballVelocity,  speed, speedPeak);
 
@@ -348,7 +382,6 @@ void play() {
       canSample = false;
       
       hits ++;
-
     } else {
       speedPeak = speed;
       ballVelocity = speedPeak * sensorScale;
@@ -356,13 +389,13 @@ void play() {
   }
   
   // Newton's 2nd law of motion
-  float nReaction = (ballMass*worldGravity*sin(terrainSlopeAngles[ballPositionIndex]*PI/180));
-  float nFriction = (ballMass*terrainFriction*worldGravity*cos(terrainSlopeAngles[ballPositionIndex]*PI/180));
+  float nReaction = (ballMass*worldGravity*sin(terrainSlopeAngles[ballPositionIndex/10]*PI/180.0));
+  float nFriction = (ballMass*terrainFriction*worldGravity*cos(terrainSlopeAngles[ballPositionIndex/10]*PI/180.0));
 
   // acceleration
   lastBallVelocityDirection = ballVelocity >=0;
   ballVelocity -= nReaction;
-  //Serial.println(ballVelocity);
+
   // friction 
   if (ballVelocity > 0.0f) ballVelocity -= nFriction;
   else if (ballVelocity < 0.0f ) ballVelocity += nFriction;
@@ -374,14 +407,14 @@ void play() {
   }
  
   if (hysterisisCounter > hyterisisLimit) {
-    //Serial.println("hysterisi");
+    //Serial.println("hysterisis");
     ballVelocity = 0;
   }
 
   ballPosition += ballVelocity; // update ball position
 
   // position to led index with congruance
-  ballPositionIndex = int(floor(ballPosition / terrainScale)) % ledCount;
+  ballPositionIndex = int(floor(ballPosition / terrainScale)) % (pointCount*10);
 
   // immobility check
   if (lastPositionIndex != ballPositionIndex) immobilityTimer = 0; 
@@ -419,110 +452,106 @@ void play() {
   }
 }
 
-void checkSerial() {
-  if (Serial.available()) { // Serial command parsing
-    uint8_t cmd = Serial.read();
-    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-    if (cmd == 't') {
-      terrainScale =  Serial.parseFloat();
-      prefs.putFloat("t_scale", terrainScale);
-      printPrefs();
-    } else if (cmd == 's') {
-      sensorScale =  Serial.parseFloat();
-      prefs.putFloat("g_scale", sensorScale);
-      printPrefs();
-    } else if (cmd == 'm') {
-      ballMass =  Serial.parseFloat();
-      prefs.putFloat("b_mass", ballMass);
-      printPrefs();
-    }  else if (cmd == 'f') {
-      terrainFriction =  Serial.parseFloat();
-      prefs.putFloat("t_friction", terrainFriction);
-      printPrefs();
-    }  else if (cmd == 'g') {
-      worldGravity =  Serial.parseFloat();
-      prefs.putFloat("w_gravity", worldGravity);
-      printPrefs();
-    } else if (cmd == 'v') {
-      ballInHoleVelocity =  Serial.parseFloat();
-      prefs.putFloat("b_hole", ballInHoleVelocity);
-      printPrefs();
-    } else if (cmd == 'p') {
-      float initialVelocity = Serial.parseFloat();
-      ballVelocity = initialVelocity;
-      playing = true;
-    } else if (cmd == 'h') {
-      hyterisisLimit = Serial.parseInt();
-      prefs.putUInt("g_hysterisis", hyterisisLimit);
-      printPrefs();
-    } else if (cmd == 'w') {
-      showWin();
-    } else {
-      printPrefs();
-    }
-  }
-}
 
-// Replaces placeholder with button section in your web page
-String processor(const String& var){
+bool readData() {
+  File dataFile = SPIFFS.open("/data.json", "r");
+  if (!dataFile) {
+    Serial.println("Failed to open config file");
+    return false;
+  }
+
+  Serial.print("deserializeJson... ");
+  DeserializationError error = deserializeJson(json, dataFile);
+  Serial.println("done");
+
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.f_str());
+    return false;
+  }
+
+  JsonArray levelsArray = json["levels"];
+  for (int i = 0; i < levelsArray.size(); i++) {
+    float f = levelsArray[i];
+    terrainLevels[i] = levelsArray[i];
+  }
+
+  for (int i = 0; i < levelsArray.size(); i++) {
+    float angle = getAngle(i*5.0, terrainLevels[i], (i+1)*5.0, terrainLevels[i+1]);
+    terrainSlopeAngles[i] = angle;
+    Serial.print(angle);
+    Serial.print(", ");
+  }     
   
-  if (var == "T_SCALE"){
-    return String(terrainScale);
-  } else  if (var == "G_SCALE") {
-    return String(sensorScale);
-  } else  if (var == "B_MASS") {
-    return String(ballMass);
-  } else  if (var == "T_FRICTION") {
-    return String(terrainFriction);
-  } else  if (var == "W_GRAVITY") {
-    return String(worldGravity);
-  } else  if (var == "B_HOLE") {
-    return String(ballInHoleVelocity);
-  } else  if (var == "G_HYSTERISIS") {
-    return String(hyterisisLimit);
+
+  terrainScale = json["terrain_scale"];
+  sensorScale = json["sensor_scale"];
+  ballMass = json["ball_mass"];
+  terrainFriction  = json["terrain_friction"];
+  worldGravity = json["world_gravity"];
+  ballInHoleVelocity = json["ball_in_hole_velocity"];
+  hyterisisLimit  = json["hysterisis_limit"];
+
+  pointCount = levelsArray.size();
+
+  Serial.printf("point count is = %i\n", pointCount);
+  dataFile.close();
+  return true;
+}
+
+// handles uploads
+void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  String logmessage = "Client:" + request->client()->remoteIP().toString() + " " + request->url();
+  Serial.println(logmessage);
+
+  if (!index) {
+    logmessage = "Upload Start: " + String(filename);
+    // open the file on first call and store the file handle in the request object
+    request->_tempFile = SPIFFS.open("/" + filename, "w");
+    Serial.println(logmessage);
   }
-  else 
-  return String();
+
+  if (len) {
+    // stream the incoming chunk to the opened file
+    request->_tempFile.write(data, len);
+    logmessage = "Writing file: " + String(filename) + " index=" + String(index) + " len=" + String(len);
+    Serial.println(logmessage);
+  }
+
+  if (final) {
+    logmessage = "Upload Complete: " + String(filename) + ",size: " + String(index + len);
+    // close the file handle as the upload is now done
+    request->_tempFile.close();
+    Serial.println(logmessage);
+    request->redirect("/");
+  }
 }
 
-void readAnglesData(){
-    File file = SPIFFS.open("/angles.txt");
-    int index = 0;
+// handle json post
+void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+  if(!index){
+    Serial.printf("BodyStart: %u B\n", total);
+     request->_tempFile = SPIFFS.open("/data.json", "w");
+  }
 
-    while(file.available()){
-      String s = file.readStringUntil(',');
-      terrainSlopeAngles[index] = s.toFloat();
-      index++;
-    }
-    file.close();
-    ledCount = index;
-    Serial.printf("led count : %i\n", ledCount);
-}
+  request->_tempFile.write(data, len);
 
-void readLevelsData(){
-    File file = SPIFFS.open("/levels.txt");
-    int index = 0;
-
-    while(file.available()){
-      String s = file.readStringUntil(',');
-      terrainLevels[index] = s.toFloat();
-      index++;
-    }
-    file.close();
-    ledCount = index;
-    Serial.printf("led count : %i\n", ledCount);
+  if(index + len == total){
+    Serial.printf("BodyEnd: %u B\n", total);
+    request->_tempFile.close();
+    needReadData = true;
+  }
 }
 
 void setup() {
-
-    // Initialize SPIFFS
+  // Initialize SPIFFS
   if(!SPIFFS.begin(true)){
     Serial.println("An Error has occurred while mounting SPIFFS");
-    // return;
+    return;
   }
 
-  readAnglesData();
-
+  readData();
+  
   initOTA(OTA_SSID, OTA_PASSWORD);
 
   pinMode(hall_A, INPUT);
@@ -531,7 +560,6 @@ void setup() {
   
   pinMode(RETRY_GND, LOW);
   pinMode(RETRY_BUTTON, INPUT_PULLUP);
-  // attachInterrupt(RETRY_BUTTON, ISR3, FALLING);
 
   for (int i = 0; i<10; i++)   {
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
@@ -543,132 +571,39 @@ void setup() {
   
   Serial.begin(115200);
   display.setBrightness(0x0a);
-
   delay(1000);
   speedPeak = 0;
   
-
-  prefs.begin("vGolf", false); 
-  #ifdef SETUP
-  prefs.putFloat("t_scale", terrainScale);
-  prefs.putFloat("g_scale", sensorScale);
-  prefs.putFloat("b_mass", ballMass);
-  prefs.putFloat("t_friction", terrainFriction);
-  prefs.putFloat("w_gravity", worldGravity);
-  prefs.putFloat("b_hole", ballInHoleVelocity);
-  prefs.putUInt("g_hysterisis", hyterisisLimit);
-  #endif
-
-  terrainScale = prefs.getFloat("t_scale", 200.0);
-  sensorScale = prefs.getFloat("g_scale", 2.0);
-  ballMass = prefs.getFloat("b_mass", 1.0);
-  terrainFriction = prefs.getFloat("t_friction", 0.1);
-  worldGravity = prefs.getFloat("w_gravity", 9.98);
-  ballInHoleVelocity = prefs.getFloat("b_hole", 25.0);
-  hyterisisLimit = prefs.getUInt("g_hysterisis", 50);
-
   holeLedIndex = holes[holeCounter];//+ random(-20,20);
 
   FastLED.addLeds<CHIPSET, LEDSTRIP_DATA, COLOR_ORDER>(leds, MAX_LEDS).setCorrection( TypicalLEDStrip );
   FastLED.setBrightness( BRIGHTNESS );
-
   display.setSegments(GOLF);
-
 
   // Route for root / web page
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(SPIFFS, "/index.html", String(), false, processor);
-  });
-
-  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
-     request->send(SPIFFS, "/settings.html", String(), false, processor);
-  });
-
-  server.on("/editor", HTTP_GET, [](AsyncWebServerRequest *request){
-     request->send(SPIFFS, "/editor.html", String(), false);
-  });
-
-  server.on("/upload", HTTP_GET, [](AsyncWebServerRequest *request){
-    if (request->hasParam("angles")) {
-      Serial.println("processing angles");
-      String angles = request->getParam("angles")->value();
-      File file = SPIFFS.open("/angles.txt", FILE_WRITE);
-      file.print(angles);
-      file.close();
-
-      readAnglesData();
-      request->send(200, "text/plain", "OK");
-
-    } else if (request->hasParam("levels")) {
-      Serial.println("processing levels");
-      String angles = request->getParam("levels")->value();
-      File file = SPIFFS.open("/levels.txt", FILE_WRITE);
-      file.print(angles);
-      file.close();
-
-      readLevelsData();
-      request->send(200, "text/plain", "OK");
-
-    } else {
-      request->send(200, "text/plain", "NO DATA");
-    }
+    request->send(SPIFFS, "/index.html", String(), false);
   });
 
  server.on("/get", HTTP_GET, [](AsyncWebServerRequest *request){
-    if (request->hasParam("levels")) {
-      Serial.print("sending levels...   ");
-      request->send(SPIFFS, "/levels.txt", String(), false );
-      Serial.println("done.");
-    } else if (request->hasParam("angles")) {
-      Serial.print("sending angles...   ");
-      request->send(SPIFFS, "/angles.txt", String(), false );
-      Serial.println("done.");
-    } else {
-      request->send(200, "text/plain", "BAD REQUEST");
-    }
+    request->send(SPIFFS, "/data.json", String(), false );
  });
 
-  // Send a GET request to <ESP_IP>/slider?value=<inputMessage>
-  server.on("/pref", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    String inputMessage;
-    if (request->hasParam("t_scale")) {
-      inputMessage = request->getParam("t_scale")->value();
-      prefs.putFloat("t_scale", inputMessage.toFloat());
-    } else if (request->hasParam("g_scale")) {
-      inputMessage = request->getParam("g_scale")->value();
-      prefs.putFloat("g_scale", inputMessage.toFloat());
-    } else if (request->hasParam("b_mass")) {
-      inputMessage = request->getParam("b_mass")->value();
-      prefs.putFloat("b_mass", inputMessage.toFloat());
-    } else if (request->hasParam("t_friction")) {
-      inputMessage = request->getParam("t_friction")->value();
-      prefs.putFloat("t_friction", inputMessage.toFloat());
-    } else if (request->hasParam("w_gravity")) {
-      inputMessage = request->getParam("w_gravity")->value();
-      prefs.putFloat("w_gravity", inputMessage.toFloat());
-    } else if (request->hasParam("b_hole")) {
-      inputMessage = request->getParam("b_hole")->value();
-      prefs.putFloat("b_hole", inputMessage.toFloat());
-    } else if (request->hasParam("g_hysterisis")) {
-      inputMessage = request->getParam("g_hysterisis")->value();
-      prefs.putUInt("g_hysterisis", inputMessage.toInt());
-    }
-    else {
-      inputMessage = "No message sent";
-    }
+  server.on("/download", HTTP_GET, [](AsyncWebServerRequest *request){
+      Serial.print("sending levels...   ");
+      request->send(SPIFFS, "/data.json", String(), true );
+      Serial.println("done.");
+ });
 
-    terrainScale = prefs.getFloat("t_scale", 200.0);
-    sensorScale = prefs.getFloat("g_scale", 2.0);
-    ballMass = prefs.getFloat("b_mass", 1.0);
-    terrainFriction = prefs.getFloat("t_friction", 0.1);
-    worldGravity = prefs.getFloat("w_gravity", 9.98);
-    ballInHoleVelocity = prefs.getFloat("b_hole", 25.0);
-    hyterisisLimit = prefs.getUInt("g_hysterisis", 50);
+ // run handleUpload function when any file is uploaded
+  server.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request) {
+        request->send(200);
+      }, handleUpload);
+  
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
+        request->send(200);
+      },NULL, handleBody);
 
-    
-    Serial.println(inputMessage);
-    request->send(200, "text/plain", "OK");
-  });
 
   server.on("/debug", HTTP_GET, [] (AsyncWebServerRequest *request) {
     debug = !debug;
@@ -683,7 +618,10 @@ void setup() {
 }
 
 void loop() {
-  checkSerial();
+  if (needReadData) {
+    readData();
+    needReadData = false;
+  }
   ArduinoOTA.handle();
   
   digitalWrite(LED_BUILTIN,canSample);
@@ -705,16 +643,6 @@ void loop() {
       replayHole(); 
     }
   }
-
-  // if (retry){
-  //   if (hits>=7) {
-  //     showLoose();
-  //     resetGame();
-  //   } else {
-  //     showMissed();
-  //     replayHole(); 
-  //   }
-  // }
 
   if (millis() - lastPlay > 120000 ) { // 2 min reset.
     resetGame();
