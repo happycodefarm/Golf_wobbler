@@ -11,6 +11,7 @@
         -webkit-user-select: none;
         -ms-user-select: none;
       }
+
       html {font-family: Arial; display: inline-block; text-align: center;background: #051f3f; color: white;}
       h2 {font-size: 2.3rem;}
       p {font-size: 1.9rem;}
@@ -19,9 +20,10 @@
       #settings_form {
        display: flex;
        flex-direction: column;
-       justify-content: space-around;
+       /* justify-content: space-around; */
        align-items: start;
        margin-right: 2em;
+       height: 500px;
       }
 
       #container {
@@ -48,12 +50,14 @@
       }
       .slider::-webkit-slider-thumb {
         -webkit-appearance: none; appearance: none; width: 35px; height: 35px; border-radius: 5px; background: var(--slider-thumb-color); cursor: pointer;
+        border: none;
+
       }
-      .slider::-webkit-slider-thumb:active {
-        /* background: #888641; */
-      }
+      
       .slider::-moz-range-thumb {
         width: 35px; height: 35px; border-radius: 5px; background: var(--slider-thumb-color); cursor: pointer;
+        border: none;
+
       }
       .v_slider {
         -webkit-transform: translateY(-180px) rotate(-90deg);
@@ -66,6 +70,20 @@
         color: #516276;
       }
 
+      .checkbox {
+        -webkit-appearance: none; margin: 14px; width: 25px; height: 25px; background: #516276;
+        outline: none; -webkit-transition: .2s; transition: opacity .2s;
+        border-radius: 5px;
+        align-self: center;
+        border: none;
+      }
+
+      .checkbox:checked {
+        background: #91ff00;
+      
+        /* width: 35px; height: 35px; border-radius: 5px; background: var(--slider-thumb-color); cursor: pointer; */
+      }
+
       .button {
         margin-top:35px;
         background-color: #FFD65C;
@@ -76,6 +94,8 @@
         display: inline-block;
         font-size: 16px;
         align-self: flex-end;
+        border-radius: 5px;
+
       }
 
       .button:active {
@@ -88,82 +108,77 @@
         display: inline-block;
         font-size: 16px;
       }
+
+      #upload_form {
+        margin-left: 1em;
+      }
+
+      input[type="submit"] {
+        display: none;
+      }
+
+      .file_input::-webkit-file-upload-button {
+        visibility: hidden;
+        display: none;
+      }
+
+      .file_input::before {
+        content: 'Upload file';
+        display: inline-block;
+        margin-top:15px;
+        background-color: #FFD65C;
+        border: none;
+        padding: 15px 32px;
+        text-align: center;
+        text-decoration: none;
+        font-size: 16px;
+        align-self: flex-end;
+        color: black;
+        border-radius: 5px;
+
+      }
+     
     </style>
   </head>
   <body>
     <h1 id='title'>Golf Wobbler Terrain Editor</h1>
-  
-
+   
     <div id="container">
-    </div>
-    <div>
-      <input type="button" id="upload_button" class="button" value="Upload">
-      <input class="button" type="button" id="debug" name="debug" value="debug">
-      <input class="button" type="button" id="save_button" name="save" value="save">
-      <form method="POST" action="/upload" enctype="multipart/form-data"><input type="file" name="data"/><input type="submit" name="upload" value="Upload" title="Upload File"></form>
+
       <div id="settings_form">
         <div><input class="slider" type="range" id="t_scale" name="t_scale" min="0.0" max="1000" step="1.0" value=""><label for="t_scale">Terrain Scale:</label></div>
         <div><input class="slider" type="range" id="g_scale" name="g_scale" min="0" max="10" step="0.1" value=""><label for="g_scale">Sensor Scale:</label></div>
         <div><input class="slider" type="range" id="b_mass" name="b_mass" min="0" max="10" step="0.1" value=""><label for="b_mass">Ball Mass:</label></div>
-        <div><input class="slider" type="range" id="t_friction" name="t_friction" min="0" max="10" step="0.01" value=""><label for="t_friction">Terrain Friction:</label></div>
-        <div><input class="slider" type="range" id="w_gravity" name="w_gravity" min="0" max="50" step="0.1" value=""><label for="w_gravity">World Gravity:</label></div>
+        <div><input class="slider" type="range" id="t_friction" name="t_friction" min="0" max="5" step="0.01" value=""><label for="t_friction">Terrain Friction:</label></div>
+        <div><input class="slider" type="range" id="w_gravity" name="w_gravity" min="0" max="30" step="0.1" value=""><label for="w_gravity">World Gravity:</label></div>
         <div><input class="slider" type="range" id="b_hole" name="b_hole" min="0" max="10" step="0.1" value=""><label for="b_hole">Ball in hole velocity:</label></div>
         <div><input class="slider" type="range" id="g_hysterisis" name="g_hysterisis" min="0" max="500" value=""><label for="g_hysterisis">Hysterisis Limit:</label></div>
-        <div><input class="button" type="button" id="debug" name="debug" value="debug"></div>
+        <hr>
+        <div><input class="slider" type="range" id="g_tries" name="g_tries" min="1" max="20" value=""><label for="g_tries">Number of tries:</label></div>
+
+        <div>
+          <!-- <input type="button" id="upload_button" class="button" value="Upload"> -->
+        <form method="POST" action="/upload" enctype="multipart/form-data" id="upload_form">
+          <input class="button" type="button" id="debug" name="debug" value="debug">
+          <input class="button" type="button" id="save_button" name="save" value="save">
+          <input type="file" id="upload_file" class="file_input" name="data"/>
+          <input type="submit" name="upload" value="Upload" title="Upload File" >
+        </form>
+          
+        </div>
       </div>
+
     </div>
+
+    
+   
+    
+   
     <script>
 
-      let ledCount = 900
-      let ledStep = 10
-
-      let steps = ledCount / ledStep
-      let horizontalScale = 5.0
+      let steps = 90
       let container = document.getElementById('container')
 
-      for(let i = 0; i<=steps;  i++) {
-
-        let debug = document.getElementById('debug')
-        debug.onclick = function() {
-          var xhr = new XMLHttpRequest()
-          xhr.open("GET", "/debug", true)
-          xhr.send();
-        }
-
-        let sliderContainer = document.createElement('div')
-        let slider = document.createElement('input')
-        let sliderValue = document.createElement('span')
-        let sliderIndex = document.createElement('span')
-
-        sliderContainer.classList.add('slider_container')
-        slider.type = "range"
-        slider.classList.add('slider', 'v_slider')
-        slider.style.setProperty('--slider-thumb-color', `hsl(${slider.value*3.6}deg 100% 50%`)
-
-        sliderValue.classList.add('slider_value')
-        sliderValue.innerHTML = '0'
-        sliderValue.innerHTML = slider.value
-
-        sliderIndex.classList.add('slider_index')
-        sliderIndex.innerHTML = `${(i*10)+1}`
-
-        sliderContainer.appendChild(sliderIndex)
-        sliderContainer.appendChild(slider)
-        sliderContainer.appendChild(sliderValue)
-        
-        container.appendChild(sliderContainer)
-        
-        slider.oninput = function() {
-          sliderValue.innerHTML = this.value
-          slider.style.setProperty('--slider-thumb-color', `hsl(${this.value*3.6}deg 100% 50%`)
-          console.log(slider.style.getPropertyValue(""))
-        }
-        
-        slider.onchange = function() {
-          console.log("uploading data...")
-          sendData()
-        }
-      }
 
       let t_scale = document.getElementById('t_scale')
       let t_scaleLabel = document.querySelector('label[for="t_scale"]')
@@ -238,6 +253,16 @@
 
       }
 
+      let g_tries = document.getElementById('g_tries')
+      let g_triesLabel = document.querySelector('label[for="g_tries"]')
+      g_tries.oninput = function() {
+        g_tries.innerHTML = 'Number of tries: ' + this.value
+      }
+      g_tries.onchange = function() {
+        g_tries.innerHTML = 'Number of tries: ' + this.value
+        sendData()
+      }
+
         
       let saveButton = document.getElementById("save_button")
       saveButton.onclick = function() {
@@ -245,34 +270,64 @@
         location.href='/download';
       }
 
-      function computeSlopes() {
-        console.log("compute levels")
-
-        angles = []
-        anglesString = ""
-        let points = document.querySelectorAll('.v_slider')
-
-        for (let i = 0; i < steps; i++ ) {
-          let interpolatedPoints = interpolate(i*50.0, 100.0 - points[i].value, (i+1)*50.0, 100.0 - points[i+1].value, ledStep)
-        
-          for (let j = 0; j < interpolatedPoints.length-1; j++ ) {
-            let angle = getAngle(j*5.0, interpolatedPoints[j], (j+1)*horizontalScale, interpolatedPoints[j+1])
-            angles.push(angle)
-          }
-        }
-        
+      document.getElementById("upload_file").onchange = function() {
+        document.getElementById("upload_form").submit();
       }
 
-      function computeLevels() {
-        
+      function buildSlliders(count) {
+        for(let i = 0; i<=count;  i++) {
 
-        // for (let i = 0; i < steps; i++ ) {
-        //   let interpolatedPoints = interpolate(i*50.0, 100.0 - points[i].value, (i+1)*50.0, 100.0 - points[i+1].value, ledStep)
-        //   for (let j = 0; j < interpolatedPoints.length-1; j++ ) {
-        //     levels.push[interpolatedPoints[j]]
-        //     levelsString += `${interpolatedPoints[j]},`
-        //   }
-        // }
+          let debug = document.getElementById('debug')
+          debug.onclick = function() {
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", "/debug", true)
+            xhr.send();
+          }
+
+          let sliderContainer = document.createElement('div')
+          let slider = document.createElement('input')
+          let sliderValue = document.createElement('span')
+          let sliderIndex = document.createElement('span')
+          let holeCheckBox = document.createElement('input')
+
+          sliderContainer.classList.add('slider_container')
+          slider.type = "range"
+          slider.classList.add('slider', 'v_slider')
+          slider.style.setProperty('--slider-thumb-color', `hsl(${slider.value*3.6}deg 100% 50%`)
+
+          sliderValue.classList.add('slider_value')
+          sliderValue.innerHTML = '0'
+          sliderValue.innerHTML = slider.value
+
+          sliderIndex.classList.add('slider_index')
+          sliderIndex.innerHTML = `${(i*10)+1}`
+
+          holeCheckBox.type = "checkbox"
+          holeCheckBox.classList.add('checkbox')
+          holeCheckBox.dataset.index = i
+
+          sliderContainer.appendChild(sliderIndex)
+          sliderContainer.appendChild(slider)
+          sliderContainer.appendChild(sliderValue)
+          sliderContainer.appendChild(holeCheckBox)
+
+          container.appendChild(sliderContainer)
+
+          slider.oninput = function() {
+            sliderValue.innerHTML = this.value
+            slider.style.setProperty('--slider-thumb-color', `hsl(${this.value*3.6}deg 100% 50%`)
+            console.log(slider.style.getPropertyValue(""))
+          }
+
+          slider.onchange = function() {
+            console.log("uploading data...")
+            sendData()
+          }
+
+          holeCheckBox.onchange = function() {
+            sendData()
+          }
+        }
       }
 
       function sendData() {
@@ -280,12 +335,19 @@
 
         console.log("compute levels")
         let levels = []
+        let holes = []
+
         document.querySelectorAll('.v_slider').forEach(function(element) {
           levels.push(element.value)
         })
 
+        let checkboxes = document.querySelectorAll(".checkbox:checked").forEach(function(element) {
+          holes.push(element.dataset.index)
+        })
+
+
         data.levels = levels
-        // data.angles = angles
+        data.holes = holes
         data.terrain_scale = t_scale.value
         data.sensor_scale = g_scale.value
         data.ball_mass = b_mass.value
@@ -293,6 +355,7 @@
         data.world_gravity = w_gravity.value
         data.ball_in_hole_velocity = b_hole.value
         data.hysterisis_limit = g_hysterisis.value
+        data.number_of_tries = g_tries.value
         console.log(data)
 
         var xhr = new XMLHttpRequest()
@@ -308,30 +371,8 @@
           }
         }
         xhr.send(JSON.stringify(data));
-
       }
-        // function compute() {
-        //   console.log("compute levels & angles")
-        //   levels = []
-        //   angles = []
-          
-        //   let points = document.querySelectorAll('.slider')
-        //   for (let i = 0; i < steps; i++ ) {
-        //     let interpolatedPoints = interpolate(i*50.0, 100.0 - points[i].value, (i+1)*50.0, 100.0 - points[i+1].value, ledStep)
-        //     if (i==steps-1) {
-        //       console.log("interpolatedPoints")
-        //       console.log(interpolatedPoints)
-        //     }
-
-        //     for (let j = 0; j < interpolatedPoints.length-1; j++ ) {
-        //       levels.push(interpolatedPoints[j])
-        //       let angle = getAngle(j*5.0, interpolatedPoints[j], (j+1)*horizontalScale, interpolatedPoints[j+1])
-        //       angles.push(angle)
-        //     }
-        //   }
-        //   sendData()
-        // }
-
+    
       function getAngle(x1, y1, x2, y2) {
         let dx, dy, angle
         dx = x2 - x1
@@ -342,24 +383,9 @@
         return angle
       }
 
-      function interpolate(x1, y1, x2, y2, nPoints) {
-        // get equation y = ax + b
-        let  points=[]
-        let a = (y2 - y1) / (x2 - x1)
-        let b = y2 - a * x2
-        let step = Math.abs(x1 - x2) / nPoints
-        for (let x = Math.min(x1, x2); x < Math.max(x1,x2); x += step) {
-            let y = a*x+b
-            points.push(y)
-        }
-        points.push(y2)
-        return points
-      }
-
       function init()  {
-        computeSlopes()
+        getData()
       }
-      
       
       function getData() {
         console.log("getting datas")
@@ -375,6 +401,12 @@
 
               let data = JSON.parse(xhr.response)
               console.log(data)
+              
+              buildSlliders(data["levels"].length)
+
+              let checkboxes = document.querySelectorAll(".checkbox").forEach(function(element, index) {
+                if (data["holes"].includes(""+index)) element.setAttribute('checked', true)
+              })
 
               let sliders = document.querySelectorAll('.v_slider')
               let slidersValue = document.querySelectorAll('.slider_value')
@@ -407,6 +439,8 @@
               g_hysterisis.value = data.hysterisis_limit
               g_hysterisisLabel.innerHTML = `Hysterisis Limit: ${data.hysterisis_limit}`
 
+              g_tries.value = data.g_tries
+              g_triesLabel.innerHTML = `Number of tries: ${data.g_tries}`
 
             }
           }
@@ -416,7 +450,6 @@
     </script>
     <script>
       init()
-      getData()
     </script>
     </body>
   </body>
