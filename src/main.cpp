@@ -1,9 +1,10 @@
 #include <Arduino.h>
-#include "TM1637Display.h"
 #include <climits>
 #include <EEPROM.h>
-#include "elapsedMillis/elapsedMillis.h"
 #include <FastLED.h>
+#include "AiEsp32RotaryEncoder.h"
+#include <SimpleKalmanFilter.h>
+
 // OTA
 #include "OverTheAir.h"
 #include <esp_wifi.h>
@@ -17,7 +18,6 @@
 #include <ESPAsyncWebServer.h>
 AsyncWebServer server(80);
 
-
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
 StaticJsonDocument<20000> json;  
@@ -25,52 +25,27 @@ StaticJsonDocument<20000> json;
 //#define SETUP // uncomment to reset setup default
 
 // hall sensors
-#define hall_A 5
-#define hall_B 4
-#define max_samples 10
+#define ENC_A 25
+#define ENC_B 26
+
+float speed = 0;
+long position = 0;
+long lastPostion = 0;
+
+AiEsp32RotaryEncoder ballEncoder = AiEsp32RotaryEncoder(ENC_A, ENC_B);
+SimpleKalmanFilter simpleKalmanFilter(2, 2, 0.01);
+
 
 #define RETRY_BUTTON 14
 #define RETRY_GND 27
 
-volatile unsigned long ts_A = 0;
-volatile unsigned long ts_B = 0;
-volatile  long long diff = LLONG_MAX;
-volatile bool done = false;
-volatile bool sampling = false;
-volatile  bool canSample = true;
-float speedPeak;
 bool debug = false;
 
-#define MAX_LEDS 1000
+#define MAX_LEDS 1500
 int pointCount = 10;
 
 float terrainSlopeAngles[MAX_LEDS/10] = {0.0};
 float terrainLevels[MAX_LEDS/10] = {0.0};
-
-#define SAMPLING_TIME 4000000 // 4 seconds
-
-// 7 segment display
-#define CLK 26
-#define DIO 25
-
-// Animation Data - HGFEDCBA Map
-const uint8_t ANIMATION[5][4] = {
-  { 0x08, 0x08, 0x08, 0x5c },  // Frame 0
-  { 0x08, 0x08, 0x5c, 0x08 },  // Frame 1
-  { 0x08, 0x5c, 0x08, 0x08 },  // Frame 2
-  { 0x5c, 0x08, 0x08, 0x08 },  // Frame 3
-  { 0x08, 0x08, 0x08, 0x08 }   // Frame 4
-};
-const uint8_t NONE[] = {0x0, 0x0, 0x0, 0x0};
-const uint8_t PLAY[] = {B01110011, B00111000, B01011111, B01101110};
-const uint8_t HIT[] = {0x76, 0x30, 0x78, 0x00};
-const uint8_t GOOD[] = {0x3d, 0x3f, 0x3f, 0x5e};
-const uint8_t BAD[] =  {0x00, 0x7c, 0x5f, 0x5e};
-const uint8_t LOST[] = {0x38, 0x3f, 0x6d, 0x78};
-const uint8_t HOLE[] = {0x76, 0x3f, 0x38, 0x79};
-const uint8_t GOLF[] = {0x3d, 0x3f, 0x38, 0x71};
-TM1637Display display(CLK, DIO);
-
 
 // leds
 #define LEDSTRIP_DATA     13
@@ -81,7 +56,6 @@ TM1637Display display(CLK, DIO);
 #define BRIGHTNESS  255
 #define PIEZO 4
 CRGB leds[MAX_LEDS];
-
 
 // game
 float terrainScale = 200.0f;
@@ -97,8 +71,7 @@ unsigned int hyterisisLimit = 50;
 unsigned long hysterisisCounter = 0;
 bool lastBallVelocityDirection = false;
 int lastPositionIndex = 0;
-float peak = 0.0;
-unsigned long lastPlay = 0;
+volatile unsigned long lastPlay = 0;
 
 unsigned int numberOfTries = 7;
 
@@ -108,18 +81,28 @@ float ballPosition = 0.0f;
 int ballPositionIndex = 0;
 int holeLedIndex = 0;
 
-int holes[MAX_LEDS/10] = {0};
+unsigned int holes[MAX_LEDS/10] = {0};
 int holeCounter = 0;
-int maxHoles = 3;
+int holesCount = 3;
+
+unsigned int waters[MAX_LEDS/10] = {0};
+int watersCount = 3;
+
 
 volatile bool playing = false; // playing state
 
 unsigned int hitCounter = 0; // hits counter
 unsigned int missCounter = 0; // miss counter
 
-elapsedMillis immobilityTimer;
-int timeInterval = 2; // game timer
 volatile bool needReadData = false;
+
+
+void IRAM_ATTR readEncoderISR(){
+	ballEncoder.readEncoder_ISR();
+ 
+}
+
+
 
 float getAngle(float x1, float y1, float x2, float y2) {
 
@@ -152,16 +135,28 @@ void fadeall() { for(int i = 0; i < pointCount*10; i++) { leds[i].nscale8(250); 
 
 void showWinAnimation() {
   Serial.println("win");
-  display.setSegments(GOOD);
-  for (int x = 0; x < 250; x++) {
+  for (int x = 0; x < 100; x++) {
     for(int i = 0; i < pointCount*10; i++) {
         ((i+x)%6>3) ?  leds[(pointCount*10)-i] = CRGB::Yellow : leds[(pointCount*10)-i] = CRGB::Black;
-    }
-    unsigned char state = (x/10)%3;
-    if (state==0) display.setSegments(HIT);
-    else if (state==1) display.showNumberDec(hitCounter,false);
-    else display.setSegments(GOOD); 
+    }  
     FastLED.show();
+  }
+}
+
+
+void showStartAnimation() {
+  unsigned char hue = 0;
+
+  leds[holeLedIndex-1] = CRGB(255,20,0);
+  leds[holeLedIndex] = CRGB::Green;
+  leds[holeLedIndex+1] = CRGB(255,20,0);
+
+  for(int i = 0; i<pointCount ; i+=3) {
+    leds[i] = CHSV(hue++, 255, 255);
+    leds[i-1] = CHSV(hue++, 255, 255);
+    leds[i-2] = CHSV(hue++, 255, 255);
+    fadeall();
+    FastLED.show(); 
   }
 }
 
@@ -172,7 +167,16 @@ void showNextHoleAnimation() {
   leds[holeLedIndex] = CRGB::Red;
   leds[holeLedIndex+1] = CRGB(255,20,0);
 
-  display.setSegments(GOOD);
+  // for (int point = 0; point < pointCount; point++) {
+  //   leds[point*10] = CHSV(terrainLevels[point]*2.55, 255, 255); // editor terrain
+
+  //   for (int i = 0; i< 10; i++) {
+  //     float steps = (terrainLevels[point+1] - terrainLevels[point]) / 10.0;
+  //     float interpolated = terrainLevels[point] + (steps*i);
+  //     leds[(point*10)+i] = CHSV(interpolated*2.55, 255, 255); // editor terrain
+  //   }
+  // }
+
   for(int i = holes[holeCounter-1]; i < holes[holeCounter]; i+=3) {
     leds[i] = CHSV(hue++, 255, 255);
     leds[i-1] = CHSV(hue++, 255, 255);
@@ -183,9 +187,8 @@ void showNextHoleAnimation() {
 }
 
 void showLooseAnimation() {
-  display.setSegments(LOST);
 
-  for (int x = 0; x < 250; x++) {
+  for (int x = 0; x < 50; x++) {
     for(int i = 0; i < (pointCount*10); i++) {
         ((i+x)%6>3) ?  leds[i] = CRGB::Red : leds[i] = CRGB::Black;
     }
@@ -194,7 +197,6 @@ void showLooseAnimation() {
 }
 
 void showMissedAnimation() {
-  display.setSegments(BAD);
 
   if (missCounter >= numberOfTries) return;
 
@@ -212,6 +214,7 @@ void showMissedAnimation() {
 }
 
 void resetGame() {
+  // ESP.restart();
   playing = false;
   ballPosition = 0;
   ballPositionIndex = 0;
@@ -220,66 +223,50 @@ void resetGame() {
   holeLedIndex = holes[holeCounter];
   hitCounter = 0;
   missCounter = 0;
-  speedPeak = 0;
   ballVelocity = 0; 
 
-  sampling = false;
-  canSample = true;
+  // sampling = false;
   lastPlay = millis();
   retry = false;
   Serial.println("game reset");
 }
 
 void replayHole() {
-  immobilityTimer = 0;
   playing = false;
   ballPosition = 0;
   ballPositionIndex = 0;
   hysterisisCounter = 0;
-  speedPeak = 0;
   ballVelocity = 0; 
 
   missCounter ++;
 
   Serial.println("missed !");
-
-  if (missCounter == numberOfTries) { // restart game
-      showLooseAnimation();
-      resetGame();
-  }
-  sampling = false;
-  canSample = true;
 }
 
 void nextHole() {
   holeCounter++;
   playing = false;
-  speedPeak = 0;
   ballVelocity = 0; 
-  ballPosition = 0;
-  ballPositionIndex = 0;
+  // ballPosition = 0;
+  // ballPositionIndex = 0;
   hysterisisCounter = 0;
 
   Serial.println("hole !");
 
-  if (holeCounter >= maxHoles) { // last hole == win !!
+  if (holeCounter >= holesCount) { // last hole == win !!
     showWinAnimation();
-    resetGame();
-  } else { // 
-    if (missCounter == numberOfTries) { // restart game
-      showLooseAnimation();
-      resetGame();
-    } else {
-      holeLedIndex = holes[holeCounter];// + random(-20,20);
-      showNextHoleAnimation();
-    }
+    ESP.restart();
+  } else {
+    holeLedIndex = holes[holeCounter];// + random(-20,20);
+    showNextHoleAnimation();
   }
-  sampling = false;
-  canSample = true;
+  // sampling = false;
 }
 
 void draw() {
-  
+   digitalWrite(LED_BUILTIN, debug);
+   bool blink = (millis() % 1000) < 500;
+
     if (debug) {
       int led = 0;
       for (int point = 0; point < pointCount; point++) {
@@ -292,8 +279,7 @@ void draw() {
         }
       }
 
-      for (int i = 0; i<maxHoles; i++) {
-        bool blink = (millis() % 1000) < 500;
+      for (int i = 0; i<holesCount; i++) {
         leds[holes[i]-1] = blink ? CRGB(255,20,0) : CRGB::Black;
         leds[holes[i]] = blink ? CRGB::Red : CRGB::Black;
         leds[holes[i]+1] = blink ? CRGB(255,20,0) : CRGB::Black;
@@ -301,86 +287,64 @@ void draw() {
   
       //leds[led] = CHSV((100.0 - terrainLevels[led])*2.55, 255, 255); // editor terrain
     } else {
+
        for (int led = 0; led < pointCount * 10; led++) {
           leds[led] = CRGB(0,5,0); // green terrain
        }
+
+      // water
+      // for (int i = 0; i<watersCount; i++) {
+      //   for (uint8_t w = 0; w<10; w++) {
+      //     leds[waters[i]] = CRGB(0,0,255);
+      //   }
+      //   // leds[waters[i]-1] = CRGB(0,0,255);
+      //   // leds[waters[i]] = CRGB(0,0,255);
+      //   // leds[waters[i]+1] = CRGB(0,0,255);
+      // }
     }
 
   // hole
-  if (!playing) {
-    if (millis()%500 < 250) {
-      leds[holeLedIndex-1] = CRGB(255,20,0);
-      leds[holeLedIndex] = CRGB::Red;
-      leds[holeLedIndex+1] = CRGB(255,20,0);
-    }
-  } else {
+  if (playing) {
+    leds[holeLedIndex-1] = CRGB(255,20,0);
+    leds[holeLedIndex] = CRGB::Red;
+    leds[holeLedIndex+1] = CRGB(255,20,0);
+  } else if (blink) {
     leds[holeLedIndex-1] = CRGB(255,20,0);
     leds[holeLedIndex] = CRGB::Red;
     leds[holeLedIndex+1] = CRGB(255,20,0);
   }
+ 
 
   // ball
-  leds[ballPositionIndex] = CRGB::White;
-
-  if (playing) { // show ball animation
-    display.setSegments(ANIMATION[(ballPositionIndex) % 5]);
-  } else { // print game info
-      if (hitCounter == 0) { // print "play golf"
-        if (millis()%2000<1000) display.setSegments(PLAY);
-        else display.setSegments(GOLF);
-      } else { // print hitCounter count
-      int ticks = millis()%3000;
-      if (ticks<1000) display.setSegments(PLAY);
-      else if (ticks<1500) display.setSegments(NONE);
-      else if (ticks<2000) display.setSegments(HIT);
-      else display.showNumberDec(hitCounter,false);
-    }
-  }
+  leds[ballPositionIndex] =  playing ? CRGB::White : (blink ? CRGB::White : CRGB(0,5,0));
   FastLED.show();
 }
 
-void IRAM_ATTR ISR1() {
-  digitalWrite(LED_BUILTIN, HIGH);
-  ts_A = micros();
-  done = true;  
-}
-
-void IRAM_ATTR ISR2() {
-  if (done) {
-    ts_B = micros();
-    diff = ts_B - ts_A;
-    if (diff < 0) diff = -diff;
-    done = false;
-  }
-  if (canSample) sampling = true;
-  digitalWrite(LED_BUILTIN, LOW);
-}
-
-
 
 void play() {
-  if (sampling && canSample) { // waiting for sensor
-    float speed =  10000.0f / float(diff) * 1000.0f;
-    playing = true;
-    immobilityTimer = 0;
-
-    if  (speed < speedPeak || micros() - ts_B >  SAMPLING_TIME) { // slowing down or timeout : stop sampling
-      ballVelocity = speedPeak * sensorScale;
-      Serial.printf("Sampling Done\nvelocity = %f, speed = %f, peak = %f\n",ballVelocity,  speed, speedPeak);
-
-      speedPeak = 0;
-      lastPlay = millis();
-
-      sampling = false;
-      canSample = false;
-      
-      hitCounter ++;
-    } else {
-      speedPeak = speed;
-      ballVelocity = speedPeak * sensorScale;
-    }
+  if (ballEncoder.encoderChanged()) {
+     lastPlay = millis();
+     playing = true;
   }
-  
+  position = ballEncoder.readEncoder();
+  speed += (position - lastPostion);
+  lastPostion = position;
+
+  if (speed > 0.1 || speed < -0.1 ) speed = speed - (speed*0.5);
+
+  //float smoothedSpeed = simpleKalmanFilter.updateEstimate(speed);
+  //float realBallVelocity = speed * sensorScale;
+
+  ballVelocity += speed * sensorScale ;
+ 
+
+  //Serial.print(">sensor:");
+  // Serial.println(speed * sensorScale);
+  // Serial.print(">velocity:");
+  // Serial.println(ballVelocity);
+  // Serial.print(">position:");
+  // Serial.println(ballPositionIndex);
+
   // Newton's 2nd law of motion
   float nReaction = (ballMass*worldGravity*sin(terrainSlopeAngles[ballPositionIndex/10]*PI/180.0));
   float nFriction = (ballMass*terrainFriction*worldGravity*cos(terrainSlopeAngles[ballPositionIndex/10]*PI/180.0));
@@ -399,48 +363,35 @@ void play() {
     ballVelocity /=10.0;
   }
  
-  if (hysterisisCounter > hyterisisLimit) {
-    //Serial.println("hysterisis");
-    ballVelocity = 0.0;
-  }
+  // if (hysterisisCounter > hyterisisLimit) {
+  //   //Serial.println("hysterisis");
+  //   ballVelocity = 0.0;
+  //   // speed = 0.0;
+  // }
 
   ballPosition += ballVelocity; // update ball position
 
+  if (ballPosition < 0 && ballVelocity < 0.0f) { // bounce
+    ballVelocity = -ballVelocity * 0.02;
+    ballPosition = 0;
+    ballPositionIndex = 0;
+  }
   // position to led index with congruance
   ballPositionIndex = int(floor(ballPosition / terrainScale)) % (pointCount*10);
-
-  // immobility check
-  if (lastPositionIndex != ballPositionIndex) immobilityTimer = 0; 
-  lastPositionIndex = ballPositionIndex;
 
   // ball over hole velocity reduction
   if (abs(ballPositionIndex - holeLedIndex) < 2) {
     ballVelocity *= 0.5;
   }
+
+  // playing = (abs(ballVelocity > 0.1));
+
   // ball in hole check
   if (abs(ballPositionIndex - holeLedIndex) < 5 && abs(ballVelocity) < ballInHoleVelocity) {
     ballPositionIndex = holeLedIndex;
     draw();
     nextHole();
     return;
-
-  } else if (ballPositionIndex <= 0 && ballVelocity < 0.0f) { // bounce
-    ballVelocity = -ballVelocity * 0.02;
-    ballPosition = 0;
-    ballPositionIndex = 0;
-  }
-
-  if (playing && immobilityTimer > 2000) {
-    if (abs(ballPositionIndex - holeLedIndex) < 5 && abs(ballVelocity) < ballInHoleVelocity) {
-      ballPositionIndex = holeLedIndex;
-      draw();
-      nextHole();
-      return;
-    } else {
-      showMissedAnimation();
-      replayHole();
-      return;
-    }
   }
 }
 
@@ -479,14 +430,16 @@ bool readData() {
   for (int i = 0; i < holesArray.size(); i++) {
     int index = holesArray[i];
     holes[i] = index*10;
-    Serial.println(holes[i]);
   }
+  holesCount =  holesArray.size();
 
-  holeLedIndex = holes[0];
-  maxHoles =  holesArray.size();
-  Serial.print("holes count : ");
-  Serial.println(maxHoles);
 
+  // JsonArray watersArray = json["waters"];
+  // for (int i = 0; i < watersArray.size(); i++) {
+  //   int index = watersArray[i];
+  //   waters[i] = index*10;
+  // }
+  // watersCount =  watersArray.size();
 
   terrainScale = json["terrain_scale"];
   sensorScale = json["sensor_scale"];
@@ -501,6 +454,7 @@ bool readData() {
 
   Serial.printf("point count is = %i\n", pointCount);
   dataFile.close();
+  resetGame();
   return true;
 }
 
@@ -549,8 +503,6 @@ void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
 }
 
 void setup() {
-
-
   Serial.begin(115200);
 
   // Initialize SPIFFS
@@ -563,31 +515,32 @@ void setup() {
   
   initOTA(OTA_SSID, OTA_PASSWORD);
 
-  pinMode(hall_A, INPUT);
-  pinMode(hall_B, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   
   pinMode(RETRY_GND, LOW);
   pinMode(RETRY_BUTTON, INPUT_PULLUP);
 
-  for (int i = 0; i<10; i++)   {
-    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-    delay(100);
-  }
+  // for (int i = 0; i<10; i++)   {
+  //   digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  //   delay(100);
+  // }
 
-  attachInterrupt(hall_A, ISR1, FALLING);
-  attachInterrupt(hall_B, ISR2, FALLING);
-  
-  display.setBrightness(0x0a);
-  delay(1000);
-  speedPeak = 0;
+  // delay(1000);
   
   holeLedIndex = holes[holeCounter];//+ random(-20,20);
 
   FastLED.addLeds<CHIPSET, LEDSTRIP_DATA, COLOR_ORDER>(leds, MAX_LEDS).setCorrection( TypicalLEDStrip );
   FastLED.setBrightness( BRIGHTNESS );
-  display.setSegments(GOLF);
 
+  // encoder
+
+  ballEncoder.areEncoderPinsPulldownforEsp32 = false;
+  ballEncoder.begin();
+  ballEncoder.setup(readEncoderISR);
+  // ballEncoder.disableAcceleration();
+  ballEncoder.setAcceleration(200);
+
+  /// server
   // Route for root / web page
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(SPIFFS, "/index.html", String(), false);
@@ -621,8 +574,9 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
 
+  // showStartAnimation();
   draw();
-  delay(2000);
+
 }
 
 void loop() {
@@ -632,22 +586,26 @@ void loop() {
   }
   ArduinoOTA.handle();
   
-  digitalWrite(LED_BUILTIN,canSample);
-
   if(!digitalRead(RETRY_BUTTON)){ // debug button
     while(!digitalRead(RETRY_BUTTON)) {
       delay(1);
     };
-    
-    showMissedAnimation();
-    replayHole(); 
-    Serial.println("retry");
+
+    showLooseAnimation();
+    ESP.restart();
+
+    // resetGame();
+    // showLooseAnimation();
+
+    // showMissedAnimation();
+    // replayHole(); 
    
   }
 
-  if (millis() - lastPlay > 120000 ) { // 2 min reset.
-    resetGame();
-  }
+  // if (millis() - lastPlay > 120000 ) { // 2 min reset.
+  //   // resetGame();
+  //   //showLooseAnimation();
+  // }
 
   play();
   draw();

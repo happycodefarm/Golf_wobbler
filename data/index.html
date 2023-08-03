@@ -32,6 +32,7 @@
         justify-content: space-around;
         width:max-content;
         height: 500px;
+        margin: 2.5em;
       }
 
       .slider_container {
@@ -70,7 +71,7 @@
         color: #516276;
       }
 
-      .checkbox {
+      .holeCheckbox, .waterCheckbox {
         -webkit-appearance: none; margin: 14px; width: 25px; height: 25px; background: #516276;
         outline: none; -webkit-transition: .2s; transition: opacity .2s;
         border-radius: 5px;
@@ -78,10 +79,12 @@
         border: none;
       }
 
-      .checkbox:checked {
-        background: #91ff00;
-      
-        /* width: 35px; height: 35px; border-radius: 5px; background: var(--slider-thumb-color); cursor: pointer; */
+      .holeCheckbox:checked {
+        background: #ff2200;
+      }
+
+      .waterCheckbox:checked {
+        background: hsl(201, 100%, 50%);
       }
 
       .button {
@@ -144,7 +147,6 @@
     <h1 id='title'>Golf Wobbler Terrain Editor</h1>
    
     <div id="container">
-
       <div id="settings_form">
         <div><input class="slider" type="range" id="t_scale" name="t_scale" min="0.0" max="1000" step="1.0" value=""><label for="t_scale">Terrain Scale:</label></div>
         <div><input class="slider" type="range" id="g_scale" name="g_scale" min="0" max="10" step="0.1" value=""><label for="g_scale">Sensor Scale:</label></div>
@@ -153,27 +155,17 @@
         <div><input class="slider" type="range" id="w_gravity" name="w_gravity" min="0" max="30" step="0.1" value=""><label for="w_gravity">World Gravity:</label></div>
         <div><input class="slider" type="range" id="b_hole" name="b_hole" min="0" max="10" step="0.1" value=""><label for="b_hole">Ball in hole velocity:</label></div>
         <div><input class="slider" type="range" id="g_hysterisis" name="g_hysterisis" min="0" max="500" value=""><label for="g_hysterisis">Hysterisis Limit:</label></div>
-        <hr>
-        <div><input class="slider" type="range" id="g_tries" name="g_tries" min="1" max="20" value=""><label for="g_tries">Number of tries:</label></div>
-
-        <div>
-          <!-- <input type="button" id="upload_button" class="button" value="Upload"> -->
+        
         <form method="POST" action="/upload" enctype="multipart/form-data" id="upload_form">
           <input class="button" type="button" id="debug" name="debug" value="debug">
           <input class="button" type="button" id="save_button" name="save" value="save">
           <input type="file" id="upload_file" class="file_input" name="data"/>
           <input type="submit" name="upload" value="Upload" title="Upload File" >
         </form>
-          
-        </div>
+
       </div>
-
+     
     </div>
-
-    
-   
-    
-   
     <script>
 
       let steps = 90
@@ -253,17 +245,7 @@
 
       }
 
-      let g_tries = document.getElementById('g_tries')
-      let g_triesLabel = document.querySelector('label[for="g_tries"]')
-      g_tries.oninput = function() {
-        g_tries.innerHTML = 'Number of tries: ' + this.value
-      }
-      g_tries.onchange = function() {
-        g_tries.innerHTML = 'Number of tries: ' + this.value
-        sendData()
-      }
-
-        
+      
       let saveButton = document.getElementById("save_button")
       saveButton.onclick = function() {
         console.log('saving')
@@ -275,7 +257,7 @@
       }
 
       function buildSlliders(count) {
-        for(let i = 0; i<=count;  i++) {
+        for(let i = 0; i<count;  i++) {
 
           let debug = document.getElementById('debug')
           debug.onclick = function() {
@@ -289,6 +271,7 @@
           let sliderValue = document.createElement('span')
           let sliderIndex = document.createElement('span')
           let holeCheckBox = document.createElement('input')
+          let waterCheckBox = document.createElement('input')
 
           sliderContainer.classList.add('slider_container')
           slider.type = "range"
@@ -303,13 +286,19 @@
           sliderIndex.innerHTML = `${(i*10)+1}`
 
           holeCheckBox.type = "checkbox"
-          holeCheckBox.classList.add('checkbox')
+          holeCheckBox.classList.add('holeCheckbox')
           holeCheckBox.dataset.index = i
+
+          waterCheckBox.type = "checkbox"
+          waterCheckBox.classList.add('waterCheckbox')
+          waterCheckBox.dataset.index = i
+
 
           sliderContainer.appendChild(sliderIndex)
           sliderContainer.appendChild(slider)
           sliderContainer.appendChild(sliderValue)
           sliderContainer.appendChild(holeCheckBox)
+          sliderContainer.appendChild(waterCheckBox)
 
           container.appendChild(sliderContainer)
 
@@ -327,6 +316,10 @@
           holeCheckBox.onchange = function() {
             sendData()
           }
+
+          waterCheckBox.onchange = function() {
+            sendData()
+          }
         }
       }
 
@@ -336,18 +329,25 @@
         console.log("compute levels")
         let levels = []
         let holes = []
+        let waters = []
 
         document.querySelectorAll('.v_slider').forEach(function(element) {
           levels.push(element.value)
         })
 
-        let checkboxes = document.querySelectorAll(".checkbox:checked").forEach(function(element) {
+        let holeCheckboxes = document.querySelectorAll(".holeCheckbox:checked").forEach(function(element) {
           holes.push(element.dataset.index)
+        })
+
+        let waterCheckboxes = document.querySelectorAll(".waterCheckbox:checked").forEach(function(element) {
+          waters.push(element.dataset.index)
         })
 
 
         data.levels = levels
         data.holes = holes
+        data.waters = waters
+
         data.terrain_scale = t_scale.value
         data.sensor_scale = g_scale.value
         data.ball_mass = b_mass.value
@@ -355,7 +355,6 @@
         data.world_gravity = w_gravity.value
         data.ball_in_hole_velocity = b_hole.value
         data.hysterisis_limit = g_hysterisis.value
-        data.number_of_tries = g_tries.value
         console.log(data)
 
         var xhr = new XMLHttpRequest()
@@ -404,13 +403,17 @@
               
               buildSlliders(data["levels"].length)
 
-              let checkboxes = document.querySelectorAll(".checkbox").forEach(function(element, index) {
+              let holeCheckboxes = document.querySelectorAll(".holeCheckbox").forEach(function(element, index) {
                 if (data["holes"].includes(""+index)) element.setAttribute('checked', true)
+              })
+
+              let waterCheckboxes = document.querySelectorAll(".waterCheckbox").forEach(function(element, index) {
+                if (data["waters"].includes(""+index)) element.setAttribute('checked', true)
               })
 
               let sliders = document.querySelectorAll('.v_slider')
               let slidersValue = document.querySelectorAll('.slider_value')
-              let sliderCount =  data["levels"].length
+              let sliderCount = data["levels"].length
                            
               for (let i = 0; i < sliders.length; i++ ) {
                 sliders[i].value = data["levels"][i]
@@ -431,16 +434,13 @@
               t_frictionLabel.innerHTML = `Terrain Friction: ${data.terrain_friction}`
 
               w_gravity.value = data.world_gravity
-              w_gravityLabel.innerHTML =  `Workld Gravity: ${data.world_gravity}`
+              w_gravityLabel.innerHTML =  `World Gravity: ${data.world_gravity}`
 
               b_hole.value = data.ball_in_hole_velocity
               b_holeLabel.innerHTML = `Ball In Hole Velocity: ${data.ball_in_hole_velocity}`
 
               g_hysterisis.value = data.hysterisis_limit
               g_hysterisisLabel.innerHTML = `Hysterisis Limit: ${data.hysterisis_limit}`
-
-              g_tries.value = data.g_tries
-              g_triesLabel.innerHTML = `Number of tries: ${data.g_tries}`
 
             }
           }
@@ -451,6 +451,5 @@
     <script>
       init()
     </script>
-    </body>
   </body>
 </html>
